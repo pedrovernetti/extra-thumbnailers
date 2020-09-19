@@ -1,6 +1,6 @@
 # extra-thumbnailers
 
-A pack of 3 thumbnailers covering file formats for which there are no default thumbnailers on GNOME environments, namely ePUB documents, Windows executables/DLLs and WebP images.
+A pack of 3 thumbnailers covering file formats for which there are no "default" thumbnailer on GNOME environments, namely ePUB documents, Windows executables/DLLs and WebP images.
 
 ##### epub-thumbnailer
 
