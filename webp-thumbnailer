@@ -1,0 +1,38 @@
+#!/bin/python3
+
+# =============================================================================================
+# This program is free software: you can redistribute it and/or modify it under the terms of
+# the GNU General Public License as published by the Free Software Foundation, either version
+# 3 of the License, or (at your option) any later version.
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+# without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU General Public License for more details.
+# This script must/should come together with a copy of the GNU General Public License. If not,
+# access <http://www.gnu.org/licenses/> to find and read it.
+#
+# Author: Pedro Vernetti G.
+# Name: webp-thumbnailer
+# Description: generates thumbnails for WebP image files
+#
+# #  In order to have this script working (if it is currently not), run 'install.sh'.
+# =============================================================================================
+
+from sys import argv
+from urllib.request import urlopen
+from io import BytesIO
+from PIL import Image
+
+
+
+if (__name__ == '__main__'):
+    inputfile = argv[1] # Which file are we working with?
+    outfile = argv[2] # Where does the file have to be saved to?
+    size = int(argv[3]) # Required size?
+
+    if (not inputfile.lower().endswith(r'.webp')): exit(1)
+
+    try: image = urlopen(inputfile, r'rb').read()
+    except: exit(1)
+    thumbnail = Image.open(BytesIO(image))
+    thumbnail.thumbnail((size, size))
+    thumbnail.save(outfile, r'PNG')

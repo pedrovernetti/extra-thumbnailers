@@ -1,0 +1,136 @@
+#!/usr/bin/python3
+
+# =============================================================================================
+# This program is free software: you can redistribute it and/or modify it under the terms of
+# the GNU General Public License as published by the Free Software Foundation, either version
+# 3 of the License, or (at your option) any later version.
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+# without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU General Public License for more details.
+# This script must/should come together with a copy of the GNU General Public License. If not,
+# access <http://www.gnu.org/licenses/> to find and read it.
+#
+# Author: James Lu (https://jlu5.com/), Pedro Vernetti G.
+# Name: ms-thumbnailer
+# Description: generates thumbnails for .lnk, .exe and .dll files
+#
+# #  In order to have this script working (if it is currently not), run 'install.sh'.
+# =============================================================================================
+
+import sys
+from io import BytesIO
+from struct import pack as packStruct
+from PIL import Image
+import pefile
+
+
+
+class IconExtractorError(Exception):
+    pass
+class NoIconsAvailableError(IconExtractorError):
+    pass
+class InvalidIconDefinitionError(IconExtractorError):
+    pass
+
+
+
+class IconExtractor():
+
+    def __init__( self, filename ):
+        self.GRPICONDIRENTRY_FORMAT = (r'GRPICONDIRENTRY',
+                (r'B,Width', r'B,Height', r'B,ColorCount', r'B,Reserved',
+                 r'H,Planes', r'H,BitCount', r'I,BytesInRes', r'H,ID'))
+        self.GRPICONDIR_FORMAT = (r'GRPICONDIR', (r'H,Reserved', r'H,Type', r'H,Count'))
+        self.filename = filename
+        # Use fast loading and explicitly load the RESOURCE directory entry. This saves a LOT of time
+        # on larger files
+        self._pe = pefile.PE(filename, fast_load=True)
+        self._pe.parse_data_directories(pefile.DIRECTORY_ENTRY[r'IMAGE_DIRECTORY_ENTRY_RESOURCE'])
+
+        if not hasattr(self._pe, r'DIRECTORY_ENTRY_RESOURCE'):
+            raise NoIconsAvailableError(f"{filename} has no resources")
+
+        # Reverse the list of entries before making the mapping so that earlier values take precedence
+        # When an executable includes multiple icon resources, we should use only the first one.
+        resources = {rsrc.id: rsrc for rsrc in reversed(self._pe.DIRECTORY_ENTRY_RESOURCE.entries)}
+
+        self.groupiconres = resources.get(pefile.RESOURCE_TYPE[r'RT_GROUP_ICON'])
+        if not self.groupiconres:
+            raise NoIconsAvailableError(f"{filename} has no group icon resources")
+        self.rticonres = resources.get(pefile.RESOURCE_TYPE[r'RT_ICON'])
+
+    def _get_group_icon_entries( self, num=0 ):
+        # Returns the group icon entries for the specified group icon in the executable
+        groupicon = self.groupiconres.directory.entries[num]
+        if groupicon.struct.DataIsDirectory:
+            groupicon = groupicon.directory.entries[0] # Select the first language from subfolders as needed
+
+        # Read the data pointed to by the group icon directory (GRPICONDIR) struct
+        rva = groupicon.data.struct.OffsetToData
+        size = groupicon.data.struct.Size
+        data = self._pe.get_data(rva, size)
+        file_offset = self._pe.get_offset_from_rva(rva)
+
+        grp_icon_dir = self._pe.__unpack_data__(self.GRPICONDIR_FORMAT, data, file_offset)
+
+        if grp_icon_dir.Reserved:
+            raise InvalidIconDefinitionError("Invalid group icon definition (got Reserved=%s instead of 0)" % hex(grp_icon_dir.Reserved))
+
+        # For each group icon entry (GRPICONDIRENTRY) that immediately follows, read its data and save it
+        grp_icons = []
+        icon_offset = grp_icon_dir.sizeof()
+        for idx in range(grp_icon_dir.Count):
+            grp_icon = self._pe.__unpack_data__(self.GRPICONDIRENTRY_FORMAT, data[icon_offset:], file_offset+icon_offset)
+            icon_offset += grp_icon.sizeof()
+            grp_icons.append(grp_icon)
+
+        return grp_icons
+
+    def _get_icon_data( self, icon_ids ):
+        # Return a list of raw icon images corresponding to the icon IDs given
+        icons = []
+        icon_entry_lists = {icon_entry_list.id: icon_entry_list for icon_entry_list in self.rticonres.directory.entries}
+        for icon_id in icon_ids:
+            icon_entry_list = icon_entry_lists[icon_id]
+            icon_entry = icon_entry_list.directory.entries[0]  # Select first language
+            rva = icon_entry.data.struct.OffsetToData
+            size = icon_entry.data.struct.Size
+            data = self._pe.get_data(rva, size)
+            icons.append(data)
+        return icons
+
+    def get_icon( self, num=0 ):
+        file = BytesIO()
+        group_icons = self._get_group_icon_entries(num=num)
+        icon_images = self._get_icon_data([g.ID for g in group_icons])
+        icons = list(zip(group_icons, icon_images))
+        assert len(group_icons) == len(icon_images)
+        file.write(b'\x00\x00') # 2 reserved bytes
+        file.write(packStruct(r'<H', 1)) # 0x1 (little endian) specifying that this is an .ICO image
+        file.write(packStruct(r'<H', len(icons)))  # number of images
+        dataoffset = 6 + (len(icons) * 16)
+        for datapair in icons: # First pass: write the icon dir entries
+            group_icon, icon_data = datapair
+            # Elements in ICONDIRENTRY and GRPICONDIRENTRY are all the same
+            # except the last value, which is an ID in GRPICONDIRENTRY and
+            # the offset from the beginning of the file in ICONDIRENTRY.
+            file.write(group_icon.__pack__()[:12])
+            file.write(packStruct(r'<I', dataoffset))
+            dataoffset += len(icon_data)  # Increase offset for next image
+        for group_icon, icon_data in icons: file.write(icon_data) # Second pass: write the icon data
+        return file
+
+
+
+if (__name__ == '__main__'):
+    inputfile = sys.argv[1] # Which file are we working with?
+    outfile = sys.argv[2] # Where does the file have to be saved to?
+    size = int(sys.argv[3]) # Required size?
+    if (inputfile.lower().startswith(r'file://')): inputfile = inputfile[7:]
+    else: exit(1)
+    #TODO: treat .lnk files
+    try: iconData = IconExtractor(inputfile).get_icon()
+    except RuntimeError: exit(1)
+    thumbnail = Image.open(iconData)
+    thumbnail.thumbnail((size, size))
+    thumbnail.save(outfile, r'PNG')

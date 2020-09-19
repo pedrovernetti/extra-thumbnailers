@@ -1,0 +1,4 @@
+[Thumbnailer Entry]
+TryExec=epub-thumbnailer
+Exec=epub-thumbnailer %u %o %s
+MimeType=application/epub+zip

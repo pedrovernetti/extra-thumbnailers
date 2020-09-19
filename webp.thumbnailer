@@ -1,0 +1,4 @@
+[Thumbnailer Entry]
+TryExec=webp-thumbnailer
+Exec=webp-thumbnailer %u %o %s
+MimeType=image/webp
